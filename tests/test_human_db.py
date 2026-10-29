@@ -88,3 +88,14 @@ def test_cant_tell_carries_no_verdict(reviewer_factory):
                           ('cant_tell', 'u0____u3')])
     verdicts, _ = review([])
     assert sorted(verdicts) == [(0, 1, True), (0, 2, False), (0, 3, None)]
+
+
+def test_answers_from_an_earlier_run_hold_no_slot_until_read(reviewer_factory):
+    make, db_path = reviewer_factory
+    first = make(max_reviews=2)
+    first([(0, 1, 0.9), (0, 2, 0.8)])
+    _answer_all(db_path)
+    first([])                             # both answers read: checked -> sent
+    restarted = make(max_reviews=2)
+    restarted([(0, 3, 0.7), (0, 4, 0.6)])
+    assert len(_rows(db_path)) == 4, 'the old sent answers must not block new pairs'

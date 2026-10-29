@@ -174,3 +174,29 @@ def test_a_reviewer_is_never_asked_past_the_budget_or_twice_after_cant_tell(
     assert asked, "the run asked for no reviews"
     assert len(asked) <= 30
     assert len(asked) == len(set(asked)), "a can't-tell pair was asked again"
+
+
+def test_waiting_for_people_spends_no_iterations(dataset, monkeypatch):
+    """A UI reviewer that has no answers yet must not run the loop out."""
+    from beta_stability import algorithm_preparation
+
+    calls = []
+
+    class SlowPerson:
+        waits_for_people = True
+        poll_seconds = 0
+
+        def __call__(self, pairs):
+            calls.append(len(pairs))
+            if len(calls) <= 20:          # nobody has answered yet
+                return [], False
+            return [(n0, n1, True) for n0, n1, _ in pairs], False
+
+    monkeypatch.setattr(algorithm_preparation.reviewer, 'build',
+                        lambda *_args, **_kwargs: SlowPerson())
+    config = _config(dataset, 'slow_person')
+    config['stability']['target_alpha'] = 0.99
+    config['stability']['max_human_reviews'] = 10
+    config['algorithm']['max_outer_iterations'] = 5
+    run.run_from_config(config)
+    assert len(calls) > 20, 'the run gave up before the answers came'

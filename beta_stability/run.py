@@ -22,6 +22,7 @@ CommandLine:
 import argparse
 import logging
 import os
+import time
 
 from beta_stability import config as config_module
 from beta_stability.data import results
@@ -64,15 +65,28 @@ def run_once(config):
     # may need (manual and thresholded review); the others keep the configured cap.
     max_outer = max(config['algorithm']['max_outer_iterations'],
                     int(getattr(algorithm, 'required_outer_iterations', 0)))
+    human_reviewer = common_data.get('human_reviewer')
+    waits_for_people = getattr(human_reviewer, 'waits_for_people', False)
     iteration = 0
+    waiting = False
     while not algorithm.is_finished() and iteration < max_outer:
-        logger.info(f"Outer iteration {iteration}")
+        if not waiting:
+            logger.info(f"Outer iteration {iteration}")
         if requested_edges:
-            responses, quit_requested = reviewer.responses(
-                requested_edges, common_data['human_reviewer'])
+            responses, quit_requested = reviewer.responses(requested_edges, human_reviewer)
             if quit_requested:
                 logger.info("Human reviewer requested to quit")
                 break
+            # People answer in their own time. Until some answer arrives the
+            # graph cannot change, so poll the same request rather than spend
+            # an iteration recomputing it.
+            if waits_for_people and not responses:
+                if not waiting:
+                    logger.info(f"Waiting for reviews of {len(requested_edges)} pairs")
+                    waiting = True
+                time.sleep(human_reviewer.poll_seconds)
+                continue
+            waiting = False
             # Only the stability algorithm records "can't tell" answers (None
             # score); the others read every human score as same or different.
             if not hasattr(algorithm, 'cant_tell'):
@@ -88,7 +102,7 @@ def run_once(config):
     else:
         logger.info(f"Algorithm converged after {iteration} outer iterations")
 
-    withdraw_pending = getattr(common_data.get('human_reviewer'), 'withdraw_pending', None)
+    withdraw_pending = getattr(human_reviewer, 'withdraw_pending', None)
     if withdraw_pending is not None:
         withdraw_pending()
 

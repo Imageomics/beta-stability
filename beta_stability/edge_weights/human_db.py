@@ -6,11 +6,17 @@ from datetime import datetime
 logger = logging.getLogger("beta_stability")
 
 class human_db(object):
+    # Answers come from people, so an empty reply means "not yet": the run
+    # polls (run.py) instead of treating it as a step without reviews.
+    waits_for_people = True
+    poll_seconds = 15
+
     def __init__(self, db_path, data_df, node2uuid, id_key='uuid', max_reviews=None):
         self.db_path = db_path
         # At most this many pairs of this run are ever answered or waiting in
         # the UI; None leaves the number unbounded.
         self.max_reviews = max_reviews
+        self._returned = set()   # ids of the pairs whose answers this run has read
         self.data_df = data_df
         self.node2uuid = node2uuid
         self.uuid2node = {val: key for (key, val) in node2uuid.items()}
@@ -104,18 +110,23 @@ class human_db(object):
     def _within_budget(self, cursor, db_query):
         """Drop new pairs that would take the UI past max_reviews.
 
-        Every pair of this run already in the table, answered or still
-        waiting, holds a slot; pairs already in the table stay in the query so
-        their answers are still read back.
+        A slot is held by every answer this run has read back and by every pair
+        still waiting or answered but not yet read. Answers left in the table by
+        an earlier run hold no slot until this run reads them. Pairs already in
+        the table stay in the query so their answers are still read back.
         """
-        cursor.execute("SELECT id, uuid1, uuid2 FROM image_verification")
-        known = {pair_id for (pair_id, uuid1, uuid2) in cursor.fetchall()
-                 if uuid1 in self.uuid2node and uuid2 in self.uuid2node}
-        slots = max(0, self.max_reviews - len(known))
+        cursor.execute("SELECT id, uuid1, uuid2, status FROM image_verification")
+        known, held = set(), set(self._returned)
+        for pair_id, uuid1, uuid2, status in cursor.fetchall():
+            if uuid1 in self.uuid2node and uuid2 in self.uuid2node:
+                known.add(pair_id)
+                if status in ('awaiting', 'in_progress', 'checked'):
+                    held.add(pair_id)
+        slots = max(0, self.max_reviews - len(held))
         new = [row for row in db_query if row[0] not in known]
         if len(new) > slots:
-            logger.info(f"Review budget: {len(known)} of {self.max_reviews} pairs already "
-                        f"in the database, dropping {len(new) - slots} new pairs")
+            logger.info(f"Review budget: {len(held)} of {self.max_reviews} reviews used or "
+                        f"waiting, dropping {len(new) - slots} new pairs")
         keep = {row[0] for row in new[:slots]}
         return [row for row in db_query if row[0] in known or row[0] in keep]
 
@@ -142,7 +153,7 @@ class human_db(object):
         query: iterable of (n0, n1, score)
         returns: (reviews, False) where reviews is [(node0, node1, is_correct), ...]
         """
-        logger.info(f"__call__ invoked with {len(list(query)) if hasattr(query, '__len__') else 'unknown number of'} query pairs")
+        logger.debug(f"__call__ invoked with {len(list(query)) if hasattr(query, '__len__') else 'unknown number of'} query pairs")
         query = list(query)  # Convert to list to allow multiple iterations
         logger.debug(f"Query contains {len(query)} pairs")
 
@@ -159,14 +170,14 @@ class human_db(object):
             logger.debug(f"Database exists at {self.db_path}")
 
         reviews = []
-        logger.info(f"Connecting to database at {self.db_path}")
+        logger.debug(f"Connecting to database at {self.db_path}")
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
 
             # Prepare inserts (always with score)
             logger.debug("Converting query pairs to database format")
             db_query = [self.convert_query(n0, n1, score) for (n0, n1, score) in query]
-            logger.info(f"Converted {len(db_query)} query pairs")
+            logger.debug(f"Converted {len(db_query)} query pairs")
 
             if db_query and self.max_reviews is not None:
                 db_query = self._within_budget(cursor, db_query)
@@ -181,8 +192,9 @@ class human_db(object):
                 """, db_query)
 
             inserted_count = cursor.rowcount if db_query else 0
-            logger.info(f"Inserted {inserted_count} new pairs for checking")
-            print(f"Sent {inserted_count} new pairs for checking.")
+            logger.debug(f"Inserted {inserted_count} new pairs for checking")
+            if inserted_count:
+                logger.info(f"Sent {inserted_count} new pairs for review")
 
             # Fetch checked decisions
             logger.debug("Fetching checked decisions from database")
@@ -191,7 +203,7 @@ class human_db(object):
                 WHERE status = 'checked'
             """)
             checked_results = cursor.fetchall()
-            logger.info(f"Found {len(checked_results)} checked results")
+            logger.debug(f"Found {len(checked_results)} checked results")
 
             checked_results = [(r1, uuid1, uuid2, decision) for (r1, uuid1, uuid2, decision) in checked_results if uuid1 in self.uuid2node and uuid2 in self.uuid2node]
             logger.debug(f"Filtered to {len(checked_results)} checked results with valid UUIDs")
@@ -207,7 +219,7 @@ class human_db(object):
                     WHERE status = 'sent' AND id IN ({placeholders})
                 """, query_ids)
                 sent_results = cursor.fetchall()
-                logger.info(f"Found {len(sent_results)} results already marked as sent")
+                logger.debug(f"Found {len(sent_results)} results already marked as sent")
 
                 sent_results = [(r1, uuid1, uuid2, decision) for (r1, uuid1, uuid2, decision) in sent_results if uuid1 in self.uuid2node and uuid2 in self.uuid2node]
                 logger.debug(f"Filtered to {len(sent_results)} sent results with valid UUIDs")
@@ -232,7 +244,8 @@ class human_db(object):
 
             # Merge results
             result = checked_results + sent_results
-            logger.info(f"Total merged results: {len(result)} ({len(checked_results)} checked + {len(sent_results)} sent)")
+            self._returned.update(res[0] for res in result)
+            logger.debug(f"Total merged results: {len(result)} ({len(checked_results)} checked + {len(sent_results)} sent)")
 
             # "Can't tell" carries no verdict (None) rather than reading as "different".
             verdict = {'correct': True, 'incorrect': False}
@@ -240,8 +253,10 @@ class human_db(object):
                 (self.uuid2node[uuid1], self.uuid2node[uuid2], verdict.get(decision))
                 for (_, uuid1, uuid2, decision) in result
             ]
-            logger.info(f"Prepared {len(reviews)} reviews for return")
+            logger.debug(f"Prepared {len(reviews)} reviews for return")
             logger.debug(f"Reviews breakdown: {sum(1 for r in reviews if r[2])} correct, {sum(1 for r in reviews if not r[2])} incorrect")
 
-        logger.info(f"__call__ completed, returning {len(reviews)} reviews")
+        logger.debug(f"__call__ completed, returning {len(reviews)} reviews")
+        if reviews:
+            logger.info(f"Read {len(reviews)} reviews from the database")
         return reviews, False
