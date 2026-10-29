@@ -151,3 +151,26 @@ def test_a_name_keys_typo_names_the_fields_that_do_exist(dataset_without_identit
 
     with pytest.raises(KeyError, match='which the annotation file does not have'):
         run.run_from_config(config)
+
+
+def test_a_reviewer_is_never_asked_past_the_budget_or_twice_after_cant_tell(
+        dataset, monkeypatch):
+    """Every answer is "can't tell": the run must end within budget, not loop."""
+    from beta_stability import algorithm_preparation
+
+    asked = []
+
+    def cant_tell_reviewer(*_args, **_kwargs):
+        def review(pairs):
+            asked.extend((min(n0, n1), max(n0, n1)) for n0, n1, _ in pairs)
+            return [(n0, n1, None) for n0, n1, _ in pairs], False
+        return review
+
+    monkeypatch.setattr(algorithm_preparation.reviewer, 'build', cant_tell_reviewer)
+    config = _config(dataset, 'cant_tell')
+    config['stability']['max_human_reviews'] = 30
+    config['stability']['target_alpha'] = 0.99   # the clean data needs no reviews at 0.5
+    run.run_from_config(config)
+    assert asked, "the run asked for no reviews"
+    assert len(asked) <= 30
+    assert len(asked) == len(set(asked)), "a can't-tell pair was asked again"

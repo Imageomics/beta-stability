@@ -125,3 +125,8 @@ def test_responses_accepts_four_tuples_from_the_algorithm():
 
 def test_responses_passes_the_quit_request_through():
     assert reviewer.responses([(0, 1, 0.5)], lambda _pairs: ([], True))[1] is True
+
+
+def test_responses_keeps_cant_tell_as_a_none_score():
+    scored, _ = reviewer.responses([(0, 1, 0.7)], lambda _pairs: ([(0, 1, None)], False))
+    assert scored == [(0, 1, None, 'human')], "can't tell must not read as different"

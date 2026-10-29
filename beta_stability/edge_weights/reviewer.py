@@ -134,6 +134,7 @@ def responses(requested_edges, reviewer):
         requested_edges = [(e[0], e[1], e[2]) for e in requested_edges]
 
     verdicts, quit_requested = reviewer(requested_edges)
-    scored = [(n0, n1, 1.0 if verdict else 0.0, 'human')
+    # A verdict of None is a "can't tell" answer and is passed on as a None score.
+    scored = [(n0, n1, None if verdict is None else (1.0 if verdict else 0.0), 'human')
               for n0, n1, verdict in verdicts]
     return scored, quit_requested

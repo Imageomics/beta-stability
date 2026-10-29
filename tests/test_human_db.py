@@ -76,3 +76,15 @@ def test_unanswered_pairs_are_withdrawn_at_the_end(reviewer_factory):
                      "WHERE id='u0____u1'")
     assert review.withdraw_pending() == 1
     assert _rows(db_path) == [('u0____u1', 'checked', 'incorrect')]
+
+
+def test_cant_tell_carries_no_verdict(reviewer_factory):
+    make, db_path = reviewer_factory
+    review = make(max_reviews=None)
+    review([(0, 1, 0.9), (0, 2, 0.8), (0, 3, 0.7)])
+    with sqlite3.connect(db_path) as conn:
+        conn.executemany("UPDATE image_verification SET status='checked', decision=? WHERE id=?",
+                         [('correct', 'u0____u1'), ('incorrect', 'u0____u2'),
+                          ('cant_tell', 'u0____u3')])
+    verdicts, _ = review([])
+    assert sorted(verdicts) == [(0, 1, True), (0, 2, False), (0, 3, None)]

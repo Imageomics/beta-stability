@@ -50,6 +50,9 @@ class BetaStabilityAlgorithm:
         self.phase = "PHASE0"  # PHASE0 -> ACTIVE_REVIEW -> FINISHED
         self.num_human_reviews = 0
         self.human_attempts = {}  # review attempts per edge: {(n0, n1): count}
+        # Pairs a reviewer answered "can't tell": they count as reviews but add
+        # no evidence, and are not offered again.
+        self.cant_tell = set()
         self.phase0_iteration = 0
         self._phase0_prev_pcc_count = None
         self._phase0_stall_count = 0
@@ -134,6 +137,10 @@ class BetaStabilityAlgorithm:
                 edge_key = (min(n0, n1), max(n0, n1))
                 self.human_attempts[edge_key] = self.human_attempts.get(edge_key, 0) + 1
                 self.num_human_reviews += 1
+
+                if score is None:
+                    self.cant_tell.add(edge_key)
+                    continue
 
                 # Determine agreement BEFORE applying feedback
                 edge_data = self.graph.get_edge(n0, n1)
@@ -396,7 +403,7 @@ class BetaStabilityAlgorithm:
                 return False
             u, v = candidate.review_edge
             key = (min(u, v), max(u, v))
-            if key in used_keys:
+            if key in used_keys or key in self.cant_tell:
                 return False
             edge_data = self.graph.get_edge(u, v)
             score = edge_data.score if edge_data else 0.0

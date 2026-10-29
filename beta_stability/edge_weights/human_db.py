@@ -234,8 +234,10 @@ class human_db(object):
             result = checked_results + sent_results
             logger.info(f"Total merged results: {len(result)} ({len(checked_results)} checked + {len(sent_results)} sent)")
 
+            # "Can't tell" carries no verdict (None) rather than reading as "different".
+            verdict = {'correct': True, 'incorrect': False}
             reviews = [
-                (self.uuid2node[uuid1], self.uuid2node[uuid2], decision == 'correct')
+                (self.uuid2node[uuid1], self.uuid2node[uuid2], verdict.get(decision))
                 for (_, uuid1, uuid2, decision) in result
             ]
             logger.info(f"Prepared {len(reviews)} reviews for return")

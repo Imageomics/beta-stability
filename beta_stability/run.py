@@ -73,6 +73,10 @@ def run_once(config):
             if quit_requested:
                 logger.info("Human reviewer requested to quit")
                 break
+            # Only the stability algorithm records "can't tell" answers (None
+            # score); the others read every human score as same or different.
+            if not hasattr(algorithm, 'cant_tell'):
+                responses = [r for r in responses if r[2] is not None]
             requested_edges = algorithm.step(responses)
         else:
             logger.info("No edges for human review, continuing algorithm")
