@@ -99,6 +99,11 @@ def filter_df(df, n_filter_min, n_subsample_max, embedding_uuids, filter_key='na
             if values:  # Only filter if values are provided
                 df = filter_field_df(df, field, values, print_func=print_func)
 
+    # Stop before grouping by filter_key: a field filter that keeps nothing
+    # leaves a frame without columns, and the groupby below raises KeyError.
+    if not len(df):
+        raise EmptyDataframeException("No samples remain after filtering.")
+
     if n_filter_min:
         df = filter_min_names_df(df, n_filter_min, filter_key=filter_key, print_func=print_func)
 
