@@ -6,8 +6,11 @@ from datetime import datetime
 logger = logging.getLogger("beta_stability")
 
 class human_db(object):
-    def __init__(self, db_path, data_df, node2uuid, id_key='uuid'):
+    def __init__(self, db_path, data_df, node2uuid, id_key='uuid', max_reviews=None):
         self.db_path = db_path
+        # At most this many pairs of this run are ever answered or waiting in
+        # the UI; None leaves the number unbounded.
+        self.max_reviews = max_reviews
         self.data_df = data_df
         self.node2uuid = node2uuid
         self.uuid2node = {val: key for (key, val) in node2uuid.items()}
@@ -98,6 +101,42 @@ class human_db(object):
             float(score)
         )
 
+    def _within_budget(self, cursor, db_query):
+        """Drop new pairs that would take the UI past max_reviews.
+
+        Every pair of this run already in the table, answered or still
+        waiting, holds a slot; pairs already in the table stay in the query so
+        their answers are still read back.
+        """
+        cursor.execute("SELECT id, uuid1, uuid2 FROM image_verification")
+        known = {pair_id for (pair_id, uuid1, uuid2) in cursor.fetchall()
+                 if uuid1 in self.uuid2node and uuid2 in self.uuid2node}
+        slots = max(0, self.max_reviews - len(known))
+        new = [row for row in db_query if row[0] not in known]
+        if len(new) > slots:
+            logger.info(f"Review budget: {len(known)} of {self.max_reviews} pairs already "
+                        f"in the database, dropping {len(new) - slots} new pairs")
+        keep = {row[0] for row in new[:slots]}
+        return [row for row in db_query if row[0] in known or row[0] in keep]
+
+    def withdraw_pending(self):
+        """Remove the pairs nobody has answered, once the run no longer needs them.
+
+        Without this the UI keeps offering the last requested batch after the
+        run has finished, and those answers would never be read.
+        """
+        if not os.path.exists(self.db_path):
+            return 0
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM image_verification
+                WHERE status IN ('awaiting', 'in_progress') AND decision = 'none'
+            """)
+            withdrawn = cursor.rowcount
+        logger.info(f"Withdrew {withdrawn} unanswered pairs from the review database")
+        return withdrawn
+
     def __call__(self, query):
         """
         query: iterable of (n0, n1, score)
@@ -128,6 +167,9 @@ class human_db(object):
             logger.debug("Converting query pairs to database format")
             db_query = [self.convert_query(n0, n1, score) for (n0, n1, score) in query]
             logger.info(f"Converted {len(db_query)} query pairs")
+
+            if db_query and self.max_reviews is not None:
+                db_query = self._within_budget(cursor, db_query)
 
             if db_query:
                 logger.debug(f"Inserting {len(db_query)} pairs into image_verification table")

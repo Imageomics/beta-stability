@@ -328,6 +328,7 @@ def prepare_common(config):
         error_mode=error_mode,
         ui_db_path=data_params.get('ui_db_path'),
         simulate_human=algorithm_config['simulate_human'],
+        max_reviews=algorithm_config.get('max_human_reviews'),
     )
 
     for name, base_name in parsed_verifiers:

@@ -370,8 +370,11 @@ class BetaStabilityAlgorithm:
         # Compose the batch in strict priority order under ONE shared budget.
         # Order: INTERNAL → EXTERNAL. Internal owns intra-PCC splits, the
         # cheapest high-value reviews; EXTERNAL fills the remaining slots.
-        # Total len(batch) <= edges_per_review_batch.
-        budget = self.edges_per_review_batch
+        # Total len(batch) <= edges_per_review_batch, and never more than the
+        # reviews left under max_human_reviews, so a reviewer is not shown
+        # pairs whose answers the run would no longer use.
+        budget = min(self.edges_per_review_batch,
+                     self.max_human_reviews - self.num_human_reviews)
         batch: List[Tuple[int, int, float]] = []
         self._pending_review_types = {}
         pccs_used: Set[int] = set()

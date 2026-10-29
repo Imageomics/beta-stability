@@ -73,13 +73,15 @@ def silent(quit_run):
 # --------------------------------------------------------------------------
 
 def build(verifier_names, *, df, filtered_df, node2uuid, name_key,
-          prob_human_correct, error_mode='both', ui_db_path=None, simulate_human=True):
+          prob_human_correct, error_mode='both', ui_db_path=None, simulate_human=True,
+          max_reviews=None):
     """Build the reviewer the config asks for.
 
     ``verifier_names`` is the ordered verifier list; the first human entry in
     it decides the kind. ``'human'`` is the older spelling, kept because the
     species configs still use it, and it means simulated unless
-    ``simulate_human`` is false.
+    ``simulate_human`` is false. ``max_reviews`` caps how many pairs the UI
+    reviewer puts in front of a person.
     """
     def simulated_reviewer():
         if not name_key:
@@ -92,7 +94,7 @@ def build(verifier_names, *, df, filtered_df, node2uuid, name_key,
 
     def interactive_reviewer():
         logger.info(f"ui_human - using UI database for human reviews at {ui_db_path}")
-        return human_db(ui_db_path, filtered_df, node2uuid)
+        return human_db(ui_db_path, filtered_df, node2uuid, max_reviews=max_reviews)
 
     for name in verifier_names:
         if name == 'simulated_human':

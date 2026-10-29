@@ -84,6 +84,10 @@ def run_once(config):
     else:
         logger.info(f"Algorithm converged after {iteration} outer iterations")
 
+    withdraw_pending = getattr(common_data.get('human_reviewer'), 'withdraw_pending', None)
+    if withdraw_pending is not None:
+        withdraw_pending()
+
     logger.info("Algorithm execution completed")
     algorithm.show_stats()
 
