@@ -164,11 +164,17 @@ class metadata_verifier(object):
                 except (ValueError, TypeError):
                     pass
 
-            # Parse datetime
+            # Parse datetime. Numeric values are Unix epoch seconds; without
+            # unit='s' pandas reads them as nanoseconds, which puts every image
+            # within seconds of 1970-01-01 and makes all pairs look simultaneous.
             dt_parsed = None
             if has_datetime:
                 with contextlib.suppress(Exception):
-                    dt_parsed = pd.to_datetime(row[datetime_col])
+                    value = row[datetime_col]
+                    if isinstance(value, (int, float, np.integer, np.floating)) and not pd.isna(value):
+                        dt_parsed = pd.to_datetime(value, unit='s')
+                    else:
+                        dt_parsed = pd.to_datetime(value)
 
             # Get filename
             filename = str(row[filename_col]) if has_filename else ""
