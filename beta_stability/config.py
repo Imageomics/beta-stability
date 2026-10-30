@@ -132,6 +132,9 @@ DEFAULTS = {
         # Percentile used as the threshold when the GMM fit is rejected.
         'fallback_percentile': 99,
         'augmentation_names': 'miewid human',
+        # UI reviewer: hold the answers until every pair of the current batch is
+        # answered, then re-stabilize once, instead of after each answer.
+        'ui_wait_for_full_batch': False,
     },
     'logging': {
         'log_level': 'INFO',

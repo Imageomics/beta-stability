@@ -17,6 +17,7 @@ class human_db(object):
         # the UI; None leaves the number unbounded.
         self.max_reviews = max_reviews
         self._returned = set()   # ids of the pairs whose answers this run has read
+        self._inserted = set()   # ids of the pairs this run put in the table
         self.data_df = data_df
         self.node2uuid = node2uuid
         self.uuid2node = {val: key for (key, val) in node2uuid.items()}
@@ -52,7 +53,8 @@ class human_db(object):
             completed_at TIMESTAMP,
             instance_id TEXT,
             heartbeat TIMESTAMP,
-            read_at TIMESTAMP
+            read_at TIMESTAMP,
+            priority INTEGER
         )
         """)
         conn.commit()
@@ -67,8 +69,51 @@ class human_db(object):
         if not self._column_exists(conn, "image_verification", "read_at"):
             cursor.execute("ALTER TABLE image_verification ADD COLUMN read_at TIMESTAMP")
             conn.commit()
+        self._ensure_priority(conn)
 
         conn.close()
+
+    @classmethod
+    def _ensure_priority(cls, conn):
+        """Add the priority column the UI serves pairs by, to a table made without it."""
+        if not cls._column_exists(conn, "image_verification", "priority"):
+            conn.execute("ALTER TABLE image_verification ADD COLUMN priority INTEGER")
+            conn.commit()
+
+    def _rank_and_withdraw(self, cursor, query_ids):
+        """Rank the waiting pairs of the current request and withdraw the stale ones.
+
+        The request lists pairs in the algorithm's order, most unstable first, and
+        the UI serves the lowest priority first, so priority is the position in the
+        request. Waiting pairs outside the request lose their priority (the UI
+        serves them last), and those this run put in the table are withdrawn: the
+        graph has moved on and their answers would spend the review budget on
+        pairs the algorithm no longer asks about. Pairs someone has open
+        (in_progress) are left alone; their answers are still read.
+        """
+        current = set(query_ids)
+        cursor.execute("SELECT id FROM image_verification WHERE status = 'awaiting'")
+        stale = {pid for (pid,) in cursor.fetchall() if pid not in current}
+        withdraw = stale & self._inserted
+        if withdraw:
+            cursor.executemany(
+                "DELETE FROM image_verification WHERE id = ? AND status = 'awaiting' "
+                "AND decision = 'none'", [(pid,) for pid in withdraw])
+            logger.info(f"Withdrew {len(withdraw)} waiting pairs the current batch no longer asks for")
+        cursor.executemany("UPDATE image_verification SET priority = NULL WHERE id = ?",
+                           [(pid,) for pid in stale - withdraw])
+        cursor.executemany("UPDATE image_verification SET priority = ? WHERE id = ? "
+                           "AND status = 'awaiting'",
+                           [(rank, pid) for rank, pid in enumerate(query_ids)])
+
+    def outstanding(self):
+        """Number of this run's pairs still waiting for an answer, or open in the UI."""
+        if not self._inserted or not os.path.exists(self.db_path):
+            return 0
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute("SELECT id FROM image_verification "
+                                "WHERE status IN ('awaiting', 'in_progress')").fetchall()
+        return sum(pid in self._inserted for (pid,) in rows)
 
     def get_image_path(self, uuid):
         file_name = self.data_df.loc[self.data_df[self.id_key] == uuid, self.path_key].squeeze()
@@ -134,16 +179,18 @@ class human_db(object):
         """Remove the pairs nobody has answered, once the run no longer needs them.
 
         Without this the UI keeps offering the last requested batch after the
-        run has finished, and those answers would never be read.
+        run has finished, and those answers would never be read. Only pairs this
+        run put in the table are removed: the table may be shared, for instance
+        with the postprocessing step.
         """
-        if not os.path.exists(self.db_path):
+        if not self._inserted or not os.path.exists(self.db_path):
             return 0
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.executemany("""
                 DELETE FROM image_verification
-                WHERE status IN ('awaiting', 'in_progress') AND decision = 'none'
-            """)
+                WHERE id = ? AND status IN ('awaiting', 'in_progress') AND decision = 'none'
+            """, [(pid,) for pid in self._inserted])
             withdrawn = cursor.rowcount
         logger.info(f"Withdrew {withdrawn} unanswered pairs from the review database")
         return withdrawn
@@ -182,6 +229,16 @@ class human_db(object):
             if db_query and self.max_reviews is not None:
                 db_query = self._within_budget(cursor, db_query)
 
+            self._ensure_priority(conn)
+            query_ids = [row[0] for row in db_query]
+            if query_ids:
+                placeholders = ','.join('?' * len(query_ids))
+                cursor.execute(f"SELECT id FROM image_verification WHERE id IN ({placeholders})",
+                               query_ids)
+                existing = {pid for (pid,) in cursor.fetchall()}
+            else:
+                existing = set()
+
             if db_query:
                 logger.debug(f"Inserting {len(db_query)} pairs into image_verification table")
                 cursor.executemany("""
@@ -192,6 +249,8 @@ class human_db(object):
                 """, db_query)
 
             inserted_count = cursor.rowcount if db_query else 0
+            self._inserted.update(row[0] for row in db_query if row[0] not in existing)
+            self._rank_and_withdraw(cursor, query_ids)
             logger.debug(f"Inserted {inserted_count} new pairs for checking")
             if inserted_count:
                 logger.info(f"Sent {inserted_count} new pairs for review")

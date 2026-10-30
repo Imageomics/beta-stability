@@ -67,6 +67,10 @@ def run_once(config):
                     int(getattr(algorithm, 'required_outer_iterations', 0)))
     human_reviewer = common_data.get('human_reviewer')
     waits_for_people = getattr(human_reviewer, 'waits_for_people', False)
+    # With ui_wait_for_full_batch the answers are held, keyed by pair so a
+    # re-read answer is not counted twice, until none of the batch is left.
+    full_batch = waits_for_people and config['edge_weights'].get('ui_wait_for_full_batch', False)
+    held = {}
     iteration = 0
     waiting = False
     while not algorithm.is_finished() and iteration < max_outer:
@@ -77,6 +81,17 @@ def run_once(config):
             if quit_requested:
                 logger.info("Human reviewer requested to quit")
                 break
+            if full_batch:
+                answered = len(held)
+                held.update(((min(r[0], r[1]), max(r[0], r[1])), r) for r in responses)
+                left = human_reviewer.outstanding()
+                if left:
+                    if not waiting or len(held) != answered:
+                        logger.info(f"Waiting for the whole batch: {len(held)} answered, {left} to go")
+                        waiting = True
+                    time.sleep(human_reviewer.poll_seconds)
+                    continue
+                responses, held = list(held.values()), {}
             # People answer in their own time. Until some answer arrives the
             # graph cannot change, so poll the same request rather than spend
             # an iteration recomputing it.

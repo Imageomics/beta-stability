@@ -200,3 +200,42 @@ def test_waiting_for_people_spends_no_iterations(dataset, monkeypatch):
     config['algorithm']['max_outer_iterations'] = 5
     run.run_from_config(config)
     assert len(calls) > 20, 'the run gave up before the answers came'
+
+
+def test_full_batch_mode_waits_for_every_pair_of_a_batch(dataset, monkeypatch):
+    """ui_wait_for_full_batch: no new batch until the current one is fully answered."""
+    from beta_stability import algorithm_preparation
+
+    batches = []
+
+    class OneAtATime:
+        waits_for_people = True
+        poll_seconds = 0
+
+        def __init__(self):
+            self.request, self.done = [], set()
+
+        def __call__(self, pairs):
+            keys = [(min(n0, n1), max(n0, n1)) for n0, n1, _ in pairs]
+            if keys != self.request:
+                batches.append((list(self.request), set(self.done)))
+                self.request, self.done = keys, set()
+            todo = [k for k in keys if k not in self.done]
+            if not todo:
+                return [], False
+            self.done.add(todo[0])                   # one answer per poll
+            return [(todo[0][0], todo[0][1], True)], False
+
+        def outstanding(self):
+            return len([k for k in self.request if k not in self.done])
+
+    person = OneAtATime()
+    monkeypatch.setattr(algorithm_preparation.reviewer, 'build', lambda *_a, **_k: person)
+    config = _config(dataset, 'full_batch')
+    config['stability']['target_alpha'] = 0.99
+    config['stability']['max_human_reviews'] = 30
+    config['edge_weights']['ui_wait_for_full_batch'] = True
+    run.run_from_config(config)
+    assert len(batches) > 1, 'the run asked for more than one batch'
+    for request, done in batches[1:]:
+        assert done == set(request), 'a new batch came before the last one was answered'
