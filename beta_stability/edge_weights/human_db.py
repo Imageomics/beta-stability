@@ -1,4 +1,5 @@
 import logging
+from collections import defaultdict
 import sqlite3
 import os
 from datetime import datetime
@@ -152,6 +153,34 @@ class human_db(object):
             float(score)
         )
 
+    def _assign_rows(self, cursor, db_query):
+        """Pick the table row each requested pair is answered in.
+
+        A row holds one human decision. A pair whose rows this run has not read
+        yet (answers left by an earlier run, or a row still waiting) is answered
+        by those rows. When every row of the pair has already been read in this
+        run, the algorithm is asking again, so the pair gets a new row,
+        "<pair>#2", "#3" and so on, and goes back to the reviewer: each repeat is
+        a new decision and counts as one. Returns the query with row ids, and the
+        unread answered rows that the request replays.
+        """
+        rows = defaultdict(list)
+        for pid, status in cursor.execute("SELECT id, status FROM image_verification"):
+            rows[pid.split('#')[0]].append((pid, status))
+        assigned, replay = [], []
+        for row in db_query:
+            pair_rows = rows.get(row[0], [])
+            unread = [(pid, status) for pid, status in pair_rows if pid not in self._returned]
+            if unread:
+                pid = unread[-1][0]
+                replay += [p for p, status in unread if status == 'sent']
+            elif pair_rows:
+                pid = f"{row[0]}#{len(pair_rows) + 1}"
+            else:
+                pid = row[0]
+            assigned.append((pid,) + tuple(row[1:]))
+        return assigned, replay
+
     def _within_budget(self, cursor, db_query):
         """Drop new pairs that would take the UI past max_reviews.
 
@@ -225,11 +254,12 @@ class human_db(object):
             logger.debug("Converting query pairs to database format")
             db_query = [self.convert_query(n0, n1, score) for (n0, n1, score) in query]
             logger.debug(f"Converted {len(db_query)} query pairs")
+            self._ensure_priority(conn)
+            db_query, replay_ids = self._assign_rows(cursor, db_query)
 
             if db_query and self.max_reviews is not None:
                 db_query = self._within_budget(cursor, db_query)
 
-            self._ensure_priority(conn)
             query_ids = [row[0] for row in db_query]
             if query_ids:
                 placeholders = ','.join('?' * len(query_ids))
@@ -267,16 +297,18 @@ class human_db(object):
             checked_results = [(r1, uuid1, uuid2, decision) for (r1, uuid1, uuid2, decision) in checked_results if uuid1 in self.uuid2node and uuid2 in self.uuid2node]
             logger.debug(f"Filtered to {len(checked_results)} checked results with valid UUIDs")
 
-            # Check if any query pairs are already 'sent'
+            # Answers of the requested pairs left by an earlier run ('sent' but not
+            # read by this run): replayed, every decision of the pair.
             sent_results = []
-            if db_query:
-                query_ids = [row[0] for row in db_query]
-                logger.debug(f"Checking for {len(query_ids)} query pairs that are already sent")
-                placeholders = ','.join('?' * len(query_ids))
+            kept = {row[0].split('#')[0] for row in db_query}
+            replay_ids = [pid for pid in replay_ids if pid.split('#')[0] in kept]
+            if replay_ids:
+                logger.debug(f"Replaying {len(replay_ids)} answers an earlier run left")
+                placeholders = ','.join('?' * len(replay_ids))
                 cursor.execute(f"""
                     SELECT id, uuid1, uuid2, decision FROM image_verification
                     WHERE status = 'sent' AND id IN ({placeholders})
-                """, query_ids)
+                """, replay_ids)
                 sent_results = cursor.fetchall()
                 logger.debug(f"Found {len(sent_results)} results already marked as sent")
 

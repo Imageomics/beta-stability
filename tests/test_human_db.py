@@ -51,14 +51,16 @@ def test_waiting_and_answered_pairs_both_hold_a_slot(reviewer_factory):
     assert len(_rows(db_path)) == 3, 'only one new pair fits in the budget'
 
 
-def test_pairs_already_in_the_database_keep_being_read(reviewer_factory):
+def test_answers_an_earlier_run_left_are_replayed(reviewer_factory):
     make, db_path = reviewer_factory
-    review = make(max_reviews=1)
-    review([(0, 1, 0.9)])
+    first = make(max_reviews=1)
+    first([(0, 1, 0.9)])
     _answer_all(db_path)
-    review([(0, 1, 0.9)])            # consumed: checked -> sent
-    verdicts, _ = review([(0, 1, 0.9)])
+    first([(0, 1, 0.9)])                      # consumed: checked -> sent
+    restarted = make(max_reviews=1)
+    verdicts, _ = restarted([(0, 1, 0.9)])
     assert verdicts == [(0, 1, True)]
+    assert len(_rows(db_path)) == 1, 'a replayed answer is not asked again'
 
 
 def test_no_budget_means_no_cut(reviewer_factory):
@@ -141,3 +143,45 @@ def test_outstanding_counts_this_runs_unanswered_pairs(reviewer_factory):
         conn.execute("UPDATE image_verification SET status='checked', decision='correct' "
                      "WHERE id='u0____u1'")
     assert review.outstanding() == 1
+
+
+def _answer(db_path, pair_id, decision):
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE image_verification SET status='checked', decision=? WHERE id=?",
+                     (decision, pair_id))
+
+
+def test_a_pair_asked_again_goes_back_to_the_reviewer(reviewer_factory):
+    make, db_path = reviewer_factory
+    review = make(max_reviews=None)
+    review([(0, 1, 0.9)])
+    _answer(db_path, 'u0____u1', 'correct')
+    assert review([])[0] == [(0, 1, True)]
+    verdicts, _ = review([(0, 1, 0.9)])       # the algorithm asks again
+    assert verdicts == [], 'the stored answer is not handed back as a new decision'
+    assert ('u0____u1#2', 'awaiting', 'none') in _rows(db_path)
+    _answer(db_path, 'u0____u1#2', 'incorrect')
+    assert review([(0, 1, 0.9)])[0] == [(0, 1, False)]
+
+
+def test_each_decision_counts_once_against_the_budget(reviewer_factory):
+    make, db_path = reviewer_factory
+    review = make(max_reviews=2)
+    review([(0, 1, 0.9)])
+    _answer(db_path, 'u0____u1', 'correct')
+    review([])
+    review([(0, 1, 0.9), (0, 2, 0.8)])        # the repeat takes the second slot
+    assert {r[0] for r in _rows(db_path)} == {'u0____u1', 'u0____u1#2'}
+
+
+def test_a_restart_replays_every_decision_of_a_repeated_pair(reviewer_factory):
+    make, db_path = reviewer_factory
+    first = make(max_reviews=None)
+    first([(0, 1, 0.9)])
+    _answer(db_path, 'u0____u1', 'correct')
+    first([])
+    first([(0, 1, 0.9)])
+    _answer(db_path, 'u0____u1#2', 'correct')
+    first([])
+    verdicts, _ = make(max_reviews=None)([(0, 1, 0.9)])
+    assert verdicts == [(0, 1, True), (0, 1, True)]
