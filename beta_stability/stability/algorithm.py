@@ -71,6 +71,7 @@ class BetaStabilityAlgorithm:
         self.cap_confidence = config['cap_confidence']
         self.external_per_batch = config['external_per_batch']
         self.review_weakest_positive = config['review_weakest_positive']
+        self.weak_positive_per_batch = config['weak_positive_per_batch']
         self.review_positive_inactive = config['review_positive_inactive']
         self.unified_candidate_ranking = config['unified_candidate_ranking']
         self.human_stall_patience = config['human_stall_patience']
@@ -280,6 +281,12 @@ class BetaStabilityAlgorithm:
         # Continue Phase 0 (no human review yet)
         return []
 
+    def _weak_positive_seat_left(self, candidate, type_counts) -> bool:
+        """False once the batch holds weak_positive_per_batch WEAK_POSITIVE candidates."""
+        return (candidate.candidate_type != 'WEAK_POSITIVE'
+                or self.weak_positive_per_batch is None
+                or type_counts.get('WEAK_POSITIVE', 0) < int(self.weak_positive_per_batch))
+
     def _compute_adaptive_quotas(self, remaining_budget: int) -> Dict[str, int]:
         """Compute per-bucket slot allocation for the next batch's selectors.
 
@@ -451,6 +458,8 @@ class BetaStabilityAlgorithm:
                 if (c.candidate_type == 'EXTERNAL' and ext_cap is not None
                         and ext_added >= int(ext_cap)):
                     continue
+                if not self._weak_positive_seat_left(c, type_counts):
+                    continue
                 if _add_stability_candidate(c) and c.candidate_type == 'EXTERNAL':
                     ext_added += 1
         else:
@@ -459,7 +468,8 @@ class BetaStabilityAlgorithm:
             for c in pools['internal']:
                 if len(batch) >= budget:
                     break
-                _add_stability_candidate(c)
+                if self._weak_positive_seat_left(c, type_counts):
+                    _add_stability_candidate(c)
 
             remaining_after_internal = budget - len(batch)
             quotas = self._compute_adaptive_quotas(remaining_after_internal)

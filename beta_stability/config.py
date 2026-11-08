@@ -99,6 +99,10 @@ DEFAULTS = {
         'external_per_batch': None,
         # The two secondary selectors, both part of the published baseline.
         'review_weakest_positive': True,
+        # Cap on weakest-link (WEAK_POSITIVE) candidates per batch; null = no cap.
+        # They mostly confirm a cluster, so a cap keeps some checks against false
+        # merges without letting them crowd out merges and conflicts.
+        'weak_positive_per_batch': None,
         'review_positive_inactive': True,
         # Fill the batch from internal and external candidates ranked together
         # by stability, rather than giving internal ones priority.

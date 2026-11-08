@@ -239,3 +239,25 @@ def test_full_batch_mode_waits_for_every_pair_of_a_batch(dataset, monkeypatch):
     assert len(batches) > 1, 'the run asked for more than one batch'
     for request, done in batches[1:]:
         assert done == set(request), 'a new batch came before the last one was answered'
+
+
+def _weak_positive_per_batch(dataset, output_name, cap):
+    """Run with a simulated reviewer and return WEAK_POSITIVE per batch from the run log."""
+    import pathlib
+    import re
+    config = _config(dataset, output_name)
+    config['stability']['target_alpha'] = 0.99
+    config['stability']['max_human_reviews'] = 60
+    config['stability']['weak_positive_per_batch'] = cap
+    run.run_from_config(config)
+    logs = pathlib.Path(config['logging']['log_file']).parent.glob('run*.log')   # the name is timestamped
+    text = ''.join(log.read_text() for log in logs)
+    return [int(n) for n in re.findall(r'WEAK_POSITIVE=(\d+)', text)]
+
+
+def test_weak_positive_per_batch_caps_the_weakest_link_checks(dataset):
+    uncapped = _weak_positive_per_batch(dataset, 'weak_uncapped', None)
+    assert max(uncapped) > 2, 'the dataset must offer more weak links than the cap'
+    capped = _weak_positive_per_batch(dataset, 'weak_capped', 2)
+    assert capped and max(capped) <= 2
+    assert 2 in capped, 'the cap keeps some weakest-link checks rather than none'
