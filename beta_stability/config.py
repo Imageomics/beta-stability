@@ -103,6 +103,11 @@ DEFAULTS = {
         # They mostly confirm a cluster, so a cap keeps some checks against false
         # merges without letting them crowd out merges and conflicts.
         'weak_positive_per_batch': None,
+        # Possible merges (EXTERNAL candidates) whose pair score is below this are
+        # not offered for review; null = no floor. Pairs well below the match
+        # threshold are rarely the same individual, so asking about them seldom
+        # changes the clustering.
+        'merge_min_score': None,
         'review_positive_inactive': True,
         # Fill the batch from internal and external candidates ranked together
         # by stability, rather than giving internal ones priority.
@@ -112,6 +117,13 @@ DEFAULTS = {
         'human_stall_patience': 0,
         'human_stall_epsilon': 1e-4,
         'human_stall_min_reviews': 0,
+        # Stop after this many consecutive review batches in which at most
+        # quiet_batch_max_changes answers disagreed with the clustering, i.e.
+        # further reviews have stopped changing it. 0 = disabled. Only batches with
+        # at least half of edges_per_review_batch answers count, so partial
+        # replies from a UI reviewer cannot trigger it.
+        'quiet_batches_to_stop': 0,
+        'quiet_batch_max_changes': 2,
         # Validation against ground truth: every N reviews, and at these exact
         # review counts ('N' = one review per annotation).
         'validation_step': 100,

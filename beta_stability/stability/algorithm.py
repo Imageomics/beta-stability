@@ -77,6 +77,10 @@ class BetaStabilityAlgorithm:
         self.human_stall_patience = config['human_stall_patience']
         self._stall_epsilon = config['human_stall_epsilon']
         self._stall_min_reviews = config['human_stall_min_reviews']
+        self.quiet_batches_to_stop = config['quiet_batches_to_stop']
+        self.quiet_batch_max_changes = config['quiet_batch_max_changes']
+        self._quiet_batches = 0
+        self.merge_min_score = config['merge_min_score']
 
         # Observing the run is the tracker's business; see beta_stability.metrics.tracking.
         self.tracker = tracking.RunTracker(
@@ -179,6 +183,14 @@ class BetaStabilityAlgorithm:
                 pct = d / total * 100 if total > 0 else 0
                 parts.append(f"{ctype}: {d}/{total} disagree ({pct:.0f}%)")
             logger.info(f"Review informativeness (batch): {', '.join(parts)}")
+
+            answered = sum(type_agree.values()) + sum(type_disagree.values())
+            if self.quiet_batches_to_stop and answered >= self.edges_per_review_batch / 2:
+                changed = sum(type_disagree.values())
+                quiet = changed <= self.quiet_batch_max_changes
+                self._quiet_batches = self._quiet_batches + 1 if quiet else 0
+                logger.info(f"Batch changed {changed} of {answered}: "
+                            f"{self._quiet_batches} quiet batch(es) in a row")
 
             # Cumulative stats
             all_cumulative = set(self._cumulative_agree.keys()) | set(self._cumulative_disagree.keys())
@@ -314,6 +326,12 @@ class BetaStabilityAlgorithm:
             self._finalize('max_human_reviews')
             return []
 
+        if self.quiet_batches_to_stop and self._quiet_batches >= self.quiet_batches_to_stop:
+            logger.info(f"{self._quiet_batches} batches in a row changed at most "
+                        f"{self.quiet_batch_max_changes} answers; stopping")
+            self._finalize('quiet_batches')
+            return []
+
         # Stability snapshot for this iteration.
         self._snapshot()
 
@@ -414,6 +432,9 @@ class BetaStabilityAlgorithm:
                 return False
             edge_data = self.graph.get_edge(u, v)
             score = edge_data.score if edge_data else 0.0
+            if (candidate.candidate_type == 'EXTERNAL' and self.merge_min_score is not None
+                    and score < self.merge_min_score):
+                return False
 
             # A candidate reaches a human only after every automatic verifier
             # downstream of the one that last classified it has had its turn.
