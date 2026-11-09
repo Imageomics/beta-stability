@@ -277,10 +277,3 @@ def test_quiet_batches_stop_the_run(dataset):
     log = _run_log(dataset, 'quiet_stop', max_human_reviews=3000,
                    quiet_batches_to_stop=1, quiet_batch_max_changes=1000)   # this small set is stable after 2 batches
     assert 'TERMINATION: reason=quiet_batches' in log
-
-
-def test_merge_min_score_keeps_low_scoring_merges_out(dataset):
-    import re
-    log = _run_log(dataset, 'merge_floor', max_human_reviews=60, merge_min_score=1.01)
-    external = [int(n) for n in re.findall(r'EXTERNAL=(\d+)', log)]
-    assert external and max(external) == 0

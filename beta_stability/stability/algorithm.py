@@ -80,7 +80,6 @@ class BetaStabilityAlgorithm:
         self.quiet_batches_to_stop = config['quiet_batches_to_stop']
         self.quiet_batch_max_changes = config['quiet_batch_max_changes']
         self._quiet_batches = 0
-        self.merge_min_score = config['merge_min_score']
 
         # Observing the run is the tracker's business; see beta_stability.metrics.tracking.
         self.tracker = tracking.RunTracker(
@@ -432,9 +431,6 @@ class BetaStabilityAlgorithm:
                 return False
             edge_data = self.graph.get_edge(u, v)
             score = edge_data.score if edge_data else 0.0
-            if (candidate.candidate_type == 'EXTERNAL' and self.merge_min_score is not None
-                    and score < self.merge_min_score):
-                return False
 
             # A candidate reaches a human only after every automatic verifier
             # downstream of the one that last classified it has had its turn.

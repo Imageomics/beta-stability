@@ -103,11 +103,6 @@ DEFAULTS = {
         # They mostly confirm a cluster, so a cap keeps some checks against false
         # merges without letting them crowd out merges and conflicts.
         'weak_positive_per_batch': None,
-        # Possible merges (EXTERNAL candidates) whose pair score is below this are
-        # not offered for review; null = no floor. Pairs well below the match
-        # threshold are rarely the same individual, so asking about them seldom
-        # changes the clustering.
-        'merge_min_score': None,
         'review_positive_inactive': True,
         # Fill the batch from internal and external candidates ranked together
         # by stability, rather than giving internal ones priority.
