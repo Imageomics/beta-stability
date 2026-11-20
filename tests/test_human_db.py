@@ -185,3 +185,11 @@ def test_a_restart_replays_every_decision_of_a_repeated_pair(reviewer_factory):
     first([])
     verdicts, _ = make(max_reviews=None)([(0, 1, 0.9)])
     assert verdicts == [(0, 1, True), (0, 1, True)]
+
+
+def test_outstanding_counts_requested_pairs_an_earlier_run_left(reviewer_factory):
+    make, db_path = reviewer_factory
+    make(max_reviews=None)([(0, 1, 0.9), (0, 2, 0.8)])   # an earlier run, never answered
+    restarted = make(max_reviews=None)
+    restarted([(0, 1, 0.9), (0, 2, 0.8)])                 # the same batch again
+    assert restarted.outstanding() == 2, 'the batch is not held for pairs already in the table'

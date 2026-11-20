@@ -217,7 +217,7 @@ def test_full_batch_mode_waits_for_every_pair_of_a_batch(dataset, monkeypatch):
 
         def __call__(self, pairs):
             keys = [(min(n0, n1), max(n0, n1)) for n0, n1, _ in pairs]
-            if keys != self.request:
+            if not set(keys) <= set(self.request):   # while waiting, only the open pairs are asked
                 batches.append((list(self.request), set(self.done)))
                 self.request, self.done = keys, set()
             todo = [k for k in keys if k not in self.done]
@@ -239,6 +239,65 @@ def test_full_batch_mode_waits_for_every_pair_of_a_batch(dataset, monkeypatch):
     assert len(batches) > 1, 'the run asked for more than one batch'
     for request, done in batches[1:]:
         assert done == set(request), 'a new batch came before the last one was answered'
+
+
+def test_a_person_sees_each_pair_once_per_batch(dataset, monkeypatch):
+    """With the UI database, a pair answered during a batch is not put back to the person.
+
+    The run polls while a person answers one pair at a time. A pair asked again
+    may only come back in a later batch, never while the batch it was answered
+    in is still open.
+    """
+    import sqlite3
+    from beta_stability.algorithm_preparation import create_algorithm
+
+    steps = [0]
+
+    def counting_algorithm(*args, **kwargs):
+        algorithm, common_data = create_algorithm(*args, **kwargs)
+        step = algorithm.step
+
+        def counted(edges):
+            steps[0] += 1
+            return step(edges)
+        algorithm.step = counted
+        return algorithm, common_data
+
+    config = _config(dataset, 'ui_person')
+    db_path = config['data']['output_path'] + '/reviews.db'
+    config['data']['ui_db_path'] = db_path
+    config['edge_weights']['verifier_names'] = 'miewid ui_human'
+    config['edge_weights']['ui_wait_for_full_batch'] = True
+    config['stability']['target_alpha'] = 0.99
+    config['stability']['max_human_reviews'] = 30
+
+    answered, polls = [], [0]
+
+    import time
+    from beta_stability.edge_weights.human_db import human_db
+    sleep = time.sleep
+
+    def person_answers_one(seconds):
+        if seconds != human_db.poll_seconds:     # time.sleep is shared with the libraries
+            return sleep(seconds)
+        polls[0] += 1
+        assert polls[0] < 5000, 'the run waited for answers that never came'
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute("SELECT id, uuid1, uuid2 FROM image_verification "
+                               "WHERE status = 'awaiting' ORDER BY priority LIMIT 1").fetchone()
+            if row:
+                same = row[1][:3] == row[2][:3]           # u<individual>_<sighting>
+                conn.execute("UPDATE image_verification SET status='checked', decision=? "
+                             "WHERE id=?", ('correct' if same else 'incorrect', row[0]))
+                answered.append((row[0].split('#')[0], steps[0]))
+
+    monkeypatch.setattr(run, 'create_algorithm', counting_algorithm)
+    monkeypatch.setattr(run.time, 'sleep', person_answers_one)
+    monkeypatch.setattr(human_db, 'get_image_path', lambda _self, uuid: f'{uuid}.jpg')
+    run.run_from_config(config)
+    assert answered, 'the run asked the person nothing'
+    repeats = len(answered) - len(set(answered))
+    assert repeats == 0, f'{repeats} answers were to pairs already answered in the same batch'
 
 
 def _weak_positive_per_batch(dataset, output_name, cap):

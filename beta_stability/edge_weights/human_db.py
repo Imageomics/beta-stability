@@ -19,6 +19,7 @@ class human_db(object):
         self.max_reviews = max_reviews
         self._returned = set()   # ids of the pairs whose answers this run has read
         self._inserted = set()   # ids of the pairs this run put in the table
+        self._requested = set()  # ids of the rows the latest request is answered in
         self.data_df = data_df
         self.node2uuid = node2uuid
         self.uuid2node = {val: key for (key, val) in node2uuid.items()}
@@ -108,13 +109,18 @@ class human_db(object):
                            [(rank, pid) for rank, pid in enumerate(query_ids)])
 
     def outstanding(self):
-        """Number of this run's pairs still waiting for an answer, or open in the UI."""
-        if not self._inserted or not os.path.exists(self.db_path):
+        """Number of this run's pairs still waiting for an answer, or open in the UI.
+
+        These are the rows this run put in the table and the rows the latest
+        request is answered in, which may have been left by an earlier run.
+        """
+        mine = self._inserted | self._requested
+        if not mine or not os.path.exists(self.db_path):
             return 0
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute("SELECT id FROM image_verification "
                                 "WHERE status IN ('awaiting', 'in_progress')").fetchall()
-        return sum(pid in self._inserted for (pid,) in rows)
+        return sum(pid in mine for (pid,) in rows)
 
     def get_image_path(self, uuid):
         file_name = self.data_df.loc[self.data_df[self.id_key] == uuid, self.path_key].squeeze()
@@ -261,6 +267,7 @@ class human_db(object):
                 db_query = self._within_budget(cursor, db_query)
 
             query_ids = [row[0] for row in db_query]
+            self._requested = set(query_ids)
             if query_ids:
                 placeholders = ','.join('?' * len(query_ids))
                 cursor.execute(f"SELECT id FROM image_verification WHERE id IN ({placeholders})",

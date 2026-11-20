@@ -86,6 +86,11 @@ def run_once(config):
                 held.update(((min(r[0], r[1]), max(r[0], r[1])), r) for r in responses)
                 left = human_reviewer.outstanding()
                 if left:
+                    # Keep asking only for the pairs still open. A pair read
+                    # during this wait is answered; asking for it again would
+                    # put it back in front of the person as a new question.
+                    requested_edges = [e for e in requested_edges
+                                       if (min(e[0], e[1]), max(e[0], e[1])) not in held]
                     if not waiting or len(held) != answered:
                         logger.info(f"Waiting for the whole batch: {len(held)} answered, {left} to go")
                         waiting = True
